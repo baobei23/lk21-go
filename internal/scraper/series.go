@@ -10,42 +10,53 @@ import (
 	"github.com/baobei23/lk21-go/models"
 )
 
-// ScrapeSeries scrapes a list of series from a given URL
+// ScrapeSeries scrapes a list of series with a focus on direct efficiency.
 func ScrapeSeries(req *http.Request, res *http.Response) ([]models.Series, error) {
-	doc, err := goquery.NewDocumentFromReader(res.Body)
-	if err != nil {
-		return nil, err
+	scheme := "http"
+	if req.TLS != nil {
+		scheme = "https"
 	}
 
-	var seriesList []models.Series
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("gagal membuat dokumen goquery: %w", err)
+	}
 
-	doc.Find("main > div.container > section.archive div.grid-archive > div#grid-wrapper > div.infscroll-item").Each(func(i int, s *goquery.Selection) {
-		parent := s.Find("article.mega-item")
+	selections := doc.Find("#grid-wrapper .infscroll-item")
+
+	seriesList := make([]models.Series, 0, selections.Length())
+
+	selections.Each(func(i int, s *goquery.Selection) {
+		article := s.Find("article.mega-item")
+		linkTag := article.Find("figure > a")
+
+		href, _ := linkTag.Attr("href")
+
+		seriesIDParts := strings.Split(href, "/")
+		seriesID := seriesIDParts[len(seriesIDParts)-2]
+
+		imgTag := linkTag.Find("img")
+		posterImg, _ := imgTag.Attr("src")
+
 		var genres []string
-
-		parent.Find("footer div.grid-categories > a").Each(func(i int, s2 *goquery.Selection) {
-			href, _ := s2.Attr("href")
-			parts := strings.Split(href, "/")
+		article.Find(".grid-categories a").Each(func(_ int, genreLink *goquery.Selection) {
+			genreHref, _ := genreLink.Attr("href")
+			parts := strings.Split(genreHref, "/")
 			if len(parts) > 2 && parts[1] == "genre" {
 				genres = append(genres, parts[2])
 			}
 		})
 
-		href, _ := parent.Find("figure > a").Attr("href")
-		seriesID := strings.Split(href, "/")
-
-		posterImg, _ := parent.Find("figure > a > picture > img").Attr("src")
-		title, _ := parent.Find("figure > a > picture > img").Attr("alt")
-		episodeStr := parent.Find("figure > div.grid-meta > div.last-episode > span").Text()
+		episodeStr := article.Find(".last-episode span").Text()
 		episode, _ := strconv.Atoi(episodeStr)
 
 		series := models.Series{
-			ID:        seriesID[len(seriesID)-2],
-			Title:     title,
+			ID:        seriesID,
+			Title:     imgTag.AttrOr("alt", seriesID),
 			Type:      "series",
 			PosterImg: fmt.Sprintf("https:%s", posterImg),
-			Rating:    parent.Find("figure div.rating").Text(),
-			URL:       fmt.Sprintf("%s://%s/series/%s", req.URL.Scheme, req.Host, seriesID[len(seriesID)-2]),
+			Rating:    article.Find(".rating").Text(),
+			URL:       fmt.Sprintf("%s://%s/series/%s", scheme, req.Host, seriesID),
 			Episode:   episode,
 			Genres:    genres,
 		}
