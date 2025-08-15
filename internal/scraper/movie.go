@@ -10,41 +10,51 @@ import (
 	"github.com/PuerkitoBio/goquery"
 )
 
-// ScrapeMovies scrapes a list of movies from a given URL
 func ScrapeMovies(req *http.Request, res *http.Response) ([]models.Movie, error) {
-	doc, err := goquery.NewDocumentFromReader(res.Body)
-	if err != nil {
-		return nil, err
+	scheme := "http"
+	if req.TLS != nil {
+		scheme = "https"
 	}
 
-	var movies []models.Movie
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("gagal membuat dokumen goquery: %w", err)
+	}
 
-	doc.Find("main > div.container > section.archive div.grid-archive > div#grid-wrapper > div.infscroll-item").Each(func(i int, s *goquery.Selection) {
-		parent := s.Find("article.mega-item")
+	selections := doc.Find("#grid-wrapper .infscroll-item")
+
+	movies := make([]models.Movie, 0, selections.Length())
+
+	selections.Each(func(i int, s *goquery.Selection) {
+		article := s.Find("article.mega-item")
+		linkTag := article.Find("figure > a")
+
+		href, _ := linkTag.Attr("href")
+
+		movieIDParts := strings.Split(href, "/")
+		movieID := movieIDParts[len(movieIDParts)-2]
+
+		imgTag := linkTag.Find("img")
+		posterImg, _ := imgTag.Attr("src")
+
 		var genres []string
+		article.Find(".grid-categories a").Each(func(_ int, genreLink *goquery.Selection) {
+			genreHref, _ := genreLink.Attr("href")
 
-		parent.Find("footer div.grid-categories > a").Each(func(i int, s2 *goquery.Selection) {
-			href, _ := s2.Attr("href")
-			parts := strings.Split(href, "/")
+			parts := strings.Split(genreHref, "/")
 			if len(parts) > 2 && parts[1] == "genre" {
 				genres = append(genres, parts[2])
 			}
 		})
 
-		href, _ := parent.Find("figure > a").Attr("href")
-		movieID := strings.Split(href, "/")
-
-		posterImg, _ := parent.Find("figure > a > picture > img").Attr("src")
-		title, _ := parent.Find("figure > a > picture > img").Attr("alt")
-
 		movie := models.Movie{
-			ID:                movieID[len(movieID)-2],
-			Title:             title,
+			ID:                movieID,
+			Title:             imgTag.AttrOr("alt", ""),
 			Type:              "movie",
 			PosterImg:         fmt.Sprintf("https:%s", posterImg),
-			Rating:            parent.Find("figure div.rating").Text(),
-			URL:               fmt.Sprintf("%s://%s/movies/%s", req.URL.Scheme, req.Host, movieID[len(movieID)-2]),
-			QualityResolution: parent.Find("figure div.quality").Text(),
+			Rating:            article.Find(".rating").Text(),
+			URL:               fmt.Sprintf("%s://%s/movies/%s", scheme, req.Host, movieID),
+			QualityResolution: article.Find(".quality").Text(),
 			Genres:            genres,
 		}
 
@@ -54,65 +64,69 @@ func ScrapeMovies(req *http.Request, res *http.Response) ([]models.Movie, error)
 	return movies, nil
 }
 
-// ScrapeMovieDetails scrapes the details of a single movie
+// ScrapeMovieDetails scrapes movie details with a focus on direct efficiency.
 func ScrapeMovieDetails(req *http.Request, res *http.Response) (models.MovieDetails, error) {
 	doc, err := goquery.NewDocumentFromReader(res.Body)
 	if err != nil {
-		return models.MovieDetails{}, err
+		return models.MovieDetails{}, fmt.Errorf("gagal membuat dokumen goquery: %w", err)
 	}
 
 	var details models.MovieDetails
-	var genres, directors, countries, casts []string
 
-	doc.Find("div.content blockquote strong").Remove()
+	contentWrapper := doc.Find("div.content-wrapper")
 
-	originalURL := req.URL.Path
-	parts := strings.Split(originalURL, "/")
-	details.ID = parts[len(parts)-1]
+	// --- Ekstrak ID, Poster, dan Judul ---
+	pathParts := strings.Split(strings.Trim(req.URL.Path, "/"), "/")
+	details.ID = pathParts[len(pathParts)-1]
 
-	posterImg, _ := doc.Find("div.content-poster figure > picture > img").Attr("src")
-	title, _ := doc.Find("div.content-poster figure > picture > img").Attr("alt")
-
-	details.Title = title
+	imgTag := contentWrapper.Find(".content-poster img")
+	details.PosterImg, _ = imgTag.Attr("src")
+	if details.PosterImg != "" {
+		details.PosterImg = fmt.Sprintf("https:%s", details.PosterImg)
+	}
+	details.Title = imgTag.AttrOr("alt", details.ID) // Fallback ke ID jika alt kosong
 	details.Type = "movie"
-	details.PosterImg = fmt.Sprintf("https:%s", posterImg)
 
-	doc.Find("div.content > div").Each(func(i int, s *goquery.Selection) {
-		switch strings.ToLower(s.Find("h2").Text()) {
+	// --- Ekstrak detail dari setiap baris info ---
+	contentWrapper.Find(".content > div").Each(func(i int, s *goquery.Selection) {
+		// Konversi teks heading ke huruf kecil
+		heading := strings.ToLower(s.Find("h2").Text())
+
+		switch heading {
 		case "durasi":
-			details.Duration = strings.TrimSpace(s.Find("h3").Text())
+			details.Duration = s.Find("h3").Text()
 		case "imdb":
-			details.Rating = strings.TrimSpace(s.Find("h3:nth-child(2)").Text())
+			// BUG FIX: Ambil elemen h3 pertama untuk mendapatkan rating yang benar
+			details.Rating = s.Find("h3").First().Text()
 		case "diterbitkan":
-			details.ReleaseDate = strings.TrimSpace(s.Find("h3").Text())
+			details.ReleaseDate = s.Find("h3").Text()
 		case "kualitas":
-			details.Quality = strings.TrimSpace(s.Find("h3 > a").Text())
+			details.Quality = s.Find("h3 > a").Text()
 		case "sutradara":
-			s.Find("h3 > a").Each(func(i int, s2 *goquery.Selection) {
-				directors = append(directors, strings.TrimSpace(s2.Text()))
+			s.Find("h3 > a").Each(func(_ int, director *goquery.Selection) {
+				details.Directors = append(details.Directors, director.Text())
 			})
 		case "negara":
-			s.Find("h3 > a").Each(func(i int, s2 *goquery.Selection) {
-				countries = append(countries, s2.Text())
+			s.Find("h3 > a").Each(func(_ int, country *goquery.Selection) {
+				details.Countries = append(details.Countries, country.Text())
 			})
 		case "genre":
-			s.Find("h3 > a").Each(func(i int, s2 *goquery.Selection) {
-				genres = append(genres, s2.Text())
+			s.Find("h3 > a").Each(func(_ int, genre *goquery.Selection) {
+				details.Genres = append(details.Genres, genre.Text())
 			})
 		case "bintang film":
-			s.Find("h3").Each(func(i int, s2 *goquery.Selection) {
-				casts = append(casts, s2.Find("a").Text())
+			s.Find("h3 > a").Each(func(_ int, cast *goquery.Selection) {
+				details.Casts = append(details.Casts, cast.Text())
 			})
 		}
 	})
 
-	details.Synopsis = doc.Find("div.content blockquote").Text()
-	trailerURL, _ := doc.Find("div.action-player a.fancybox").Attr("href")
-	details.TrailerURL = trailerURL
-	details.Genres = genres
-	details.Directors = directors
-	details.Countries = countries
-	details.Casts = casts
+	// --- Ekstrak Sinopsis & Trailer ---
+	synopsisBlock := contentWrapper.Find("blockquote")
+	synopsisBlock.Find("strong, a, br").Remove()
+	details.Synopsis = strings.TrimSpace(synopsisBlock.Text())
+
+	details.TrailerURL, _ = doc.Find(".action-player a.fancybox").Attr("href")
 
 	return details, nil
 }
