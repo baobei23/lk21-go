@@ -72,3 +72,12 @@ type StreamSources struct {
 	URL         string   `json:"url"`
 	Resolutions []string `json:"resolutions"`
 }
+
+type SearchedMoviesOrSeries struct {
+	ID        string   `json:"_id"`
+	Title     string   `json:"title"`
+	Type      string   `json:"type"`
+	PosterImg string   `json:"posterImg"`
+	URL       string   `json:"url"`
+	Genres    []string `json:"genres"`
+}

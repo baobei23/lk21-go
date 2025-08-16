@@ -25,5 +25,7 @@ func NewRouter() *mux.Router {
 	router.HandleFunc("/series/{id}", handler.SeriesDetails).Methods("GET")
 	router.HandleFunc("/series/{id}/stream", handler.StreamSeries).Methods("GET")
 
+	router.HandleFunc("/search/{title}", handler.SearchedMoviesOrSeries).Methods("GET")
+
 	return router
 }
