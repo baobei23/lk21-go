@@ -66,3 +66,9 @@ type SeriesDetails struct {
 	Genres      []string      `json:"genres"`
 	Seasons     []SeasonsList `json:"seasons"`
 }
+
+type StreamSources struct {
+	Provider    string   `json:"provider"`
+	URL         string   `json:"url"`
+	Resolutions []string `json:"resolutions"`
+}
